@@ -56,3 +56,8 @@ strings of any length, and saved views store them.
 - Store notes are their own lightweight note type. They are not part of the
   Zettelkasten document, AI context, or a saved graph; the store persists by
   itself in IndexedDB.
+
+## Tests
+
+`tests/deep/` holds the math and browser tests for these modules; see its
+README. `npm run test:deep` runs them against a running dev server.
