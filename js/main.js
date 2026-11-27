@@ -167,6 +167,7 @@ class App {
         updateSettingsFromControls();
         updateSavedViewsCache();
         displaySavedCoordinates();
+        DeepStore.open();
         this.signalReady();
     }
     signalReady() {
@@ -270,6 +271,8 @@ class PageLoad {
         'js/interface/searchapi/codeparser/gitparsed.js',
         'js/interface/searchapi/wolframapi.js',
         'js/interface/neuralapi.js',
+        'js/deep/deepstore.js',
+        'js/deep/deepapi.js',
         'js/interface/functioncall/functioncallingpanel.js',
         'js/interface/functioncall/neuraltelemetryprompt.js',
         'js/interface/functioncall/requestfunctioncall.js',

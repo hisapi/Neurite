@@ -22,6 +22,7 @@ class Graph {
     addEdge(edge){
         this.addEdgeView(edge.view);
         this.edges[edge.edgeKey] = edge;
+        DeepStore.onEdgeAdded(edge); // persists links drawn between stored notes
     }
     addEdgeView(edgeView){
         this.edgeViews[edgeView.id] = edgeView;
@@ -41,6 +42,8 @@ class Graph {
     appendNode(node){ this.htmlNodes.append(node.content) }
 
     clear(){
+        // Stored notes are not part of this graph; hand them back untouched.
+        DeepStore.releaseAll();
         App.selectedNodes.clear();
         this.forEachEdge(this.deleteEdge, this);
         this.edgeDirectionalities = {};
@@ -48,6 +51,7 @@ class Graph {
     }
     deleteEdge(edge){
         this.edgeDirectionalities[edge.edgeKey] = edge.directionality;
+        DeepStore.onEdgeDeleted(edge);
 
         // Remove this edge from both connected nodes' edges arrays
         edge.pts.forEach(Node.removeThisEdge, edge);

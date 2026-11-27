@@ -170,6 +170,7 @@ class NodeSimulation {
         // many as fit the frame budget and carry the rest over, so depth
         // slows the background's refresh instead of the frame rate.
         const deadline = (DeepFractal.active ? performance.now() + DeepPerf.hairBudgetMs : Infinity);
+        DeepFractal.deadline = deadline + DeepPerf.hairBudgetMs; // a hair in progress may run this far over
         for (; regenDebt > 0; regenDebt--) {
             Fractal.render_hair(random() * settings.renderSteps);
             if (performance.now() > deadline) break;
@@ -194,6 +195,7 @@ class NodeSimulation {
         DeepFrame.maintain();   // the autopilot may have moved the view a long way
         DeepFractal.update();
         DeepPerf.beginFrame();
+        DeepStore.frame();
         Svg.updateViewbox();
         this.updateMousePath();
         this.updateMousePathWidth();

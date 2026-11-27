@@ -26,6 +26,7 @@ const DeepFractal = {
     pending: null,          // replacement being computed
     maxIter: 0,
     stats: { total: 0, inside: 0 },
+    deadline: Infinity,     // hairs stop growing past this time (set per frame)
 
     worker: null,
     workerFailed: false,
@@ -300,7 +301,7 @@ const DeepFractal = {
         let prevAngle = null;
         let totalAngle = 0;
 
-        while (points.length <= numPtsMax) {
+        while (points.length <= numPtsMax && performance.now() < this.deadline) {
             const gradMag2 = gx * gx + gy * gy;
             if (!(gradMag2 > 0) || !Number.isFinite(gradMag2)) break;
             if (Math.abs(val - level) > 1) break;
@@ -356,7 +357,7 @@ const DeepFractal = {
         let z = pt;
 
         let r = this.run(z.x, z.y, true, p);
-        while (points.length <= numPtsMax && r.captured && !r.escaped) {
+        while (points.length <= numPtsMax && r.captured && !r.escaped && performance.now() < this.deadline) {
             // gradient of |z_p|^2 is 2 z_p conj(z_p'); only its direction is used
             const dx = r.capZr * r.capVr + r.capZi * r.capVi;
             const dy = r.capZi * r.capVr - r.capZr * r.capVi;
