@@ -167,6 +167,7 @@ class App {
         updateSettingsFromControls();
         updateSavedViewsCache();
         displaySavedCoordinates();
+        DeepStore.open();
         this.signalReady();
     }
     signalReady() {
@@ -213,6 +214,13 @@ class PageLoad {
         'js/interface/dropdown/signin.js',
         'js/mandelbrot/mandelbrot.js',
         'js/mandelbrot/updatefractal.js',
+        'js/deep/deepnum.js',
+        'js/deep/reforbit.js',
+        'js/deep/deepperturb.js',
+        'js/deep/deepframe.js',
+        'js/deep/deepfractal.js',
+        'js/deep/deepperf.js',
+        'js/deep/deepnav.js',
         'js/interface/interface.js',
         'js/interface/handledrop.js',
         'js/interface/dropdown/customui/record/record.js',
@@ -263,6 +271,9 @@ class PageLoad {
         'js/interface/searchapi/codeparser/gitparsed.js',
         'js/interface/searchapi/wolframapi.js',
         'js/interface/neuralapi.js',
+        'js/deep/deepstore.js',
+        'js/deep/deepapi.js',
+        'js/deep/fractalcrawl.js',
         'js/interface/functioncall/functioncallingpanel.js',
         'js/interface/functioncall/neuraltelemetryprompt.js',
         'js/interface/functioncall/requestfunctioncall.js',

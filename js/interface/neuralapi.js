@@ -7,6 +7,17 @@ Promise.forAnimation = function(name, duration, funcUpdate, funcIsComplete){
 
 class Animation {
     static activeCount = 0;
+    static running = new Set();
+    // Animations hold view coordinates across frames; keep them valid when
+    // the deep frame is re-centred mid-flight.
+    static rebaseActive(xf){
+        for (const anim of Animation.running) {
+            if (anim.startPan) anim.startPan = xf.point(anim.startPan);
+            if (anim.endPan) anim.endPan = xf.point(anim.endPan);
+            if (anim.startZoom) anim.startZoom = xf.len(anim.startZoom);
+            if (anim.endZoom) anim.endZoom = xf.len(anim.endZoom);
+        }
+    }
     funcEase = easeInOutCubic;
     funcIsComplete = Animation.onDurationCompleted;
     funcUpdate = Animation.interpolateZoomAndPan;
@@ -59,6 +70,7 @@ class Animation {
             requestAnimationFrame(this.#onStep);
             return;
         }
+        Animation.running.delete(this);
         if (!this.#resolve) return;
 
         this.#onComplete(res);
@@ -69,6 +81,7 @@ class Animation {
         this.#resolve(res);
     }
     #onError = (err)=>{
+        Animation.running.delete(this);
         Animation.activeCount -= 1;
         Logger.err("In", this.name, "animation:", err);
         this.#reject(err);
@@ -76,7 +89,10 @@ class Animation {
 
     #reject = Function.nop;
     #resolve = Function.nop;
-    execute(){ requestAnimationFrame(this.#onStep) }
+    execute(){
+        Animation.running.add(this);
+        requestAnimationFrame(this.#onStep);
+    }
     executeProm(name = "unnamed"){
         this.name = name;
         return new Promise(this.#exec);
@@ -203,68 +219,21 @@ zoomTo = zoom.unscale(gz ** 0.5);
 autopilotReferenceFrame = this;
 panToI = new vec2(0, 0); */
 
+// Coordinates may be numbers or decimal strings. Strings are parsed exactly,
+// so a position with hundreds of digits and a zoom such as "3.1e-450" work.
 Animation.goToCoords = function(zoomMagnitude, panReal, panImaginary, speed = 0.1){
-    let animate = true;
-
-    const newZoomMagnitude = parseFloat(zoomMagnitude);
-    const newPanReal = parseFloat(panReal);
-    const newPanImaginary = parseFloat(panImaginary);
-
-    if (!animate) { // Resolve immediately
-        // Directly set the new zoom and pan values
-        if (newZoomMagnitude !== 0) {
-            Graph.zoom_scaleBy(newZoomMagnitude / Graph.zoom.mag())
-        }
-        Graph.pan_set(new vec2(newPanReal, newPanImaginary));
+    const zs = DeepNum.sxParse(String(zoomMagnitude)) || DeepFrame.zoomSx();
+    const target = DeepFrame.parsePoint(String(panReal), String(panImaginary), zs);
+    if (!target) {
+        Logger.warn("goToCoords: could not parse", panReal, panImaginary);
         return Promise.resolve();
     }
 
-    const targetZoom = Graph.zoom.scale(newZoomMagnitude / Graph.zoom.mag());
-    const targetPan = new vec2(newPanReal, newPanImaginary);
-    return (new Animation.GoToCoords(targetPan, targetZoom, speed)).promise();
-}
-Animation.GoToCoords = class {
-    constructor(targetPan, targetZoom, speed){
-        this.targetPan = targetPan;
-        this.targetZoom = targetZoom;
-        this.speed = speed;
-    }
-    promise(){
-        Autopilot.setNode().start(this.speed > 1 ? undefined : this.speed);
-        return Promise.forAnimation("Set Coords", 1, this.update, this.isComplete) // positive duration
-            .finally(Autopilot.reset);
-    }
-    update = (t)=>{
-        // Regular animation steps
-        const targetZoom = this.targetZoom;
-        const currentZoom = Graph.zoom.mag();
-        const stepZoom = currentZoom + (targetZoom.mag() - currentZoom) * t;
-
-        // Ensure zoom does not undershoot or overshoot
-        if (Math.abs(stepZoom - targetZoom.mag()) < Autopilot.threshold) {
-            Autopilot.targetZoom = targetZoom
-        } else {
-            Autopilot.targetZoom = Graph.zoom.scale(stepZoom / currentZoom)
-        }
-
-        const pan = Graph.pan;
-        const stepPanX = pan.x + (this.targetPan.x - pan.x) * t;
-        const stepPanY = pan.y + (this.targetPan.y - pan.y) * t;
-        Autopilot.targetPan = new vec2(stepPanX, stepPanY);
-    }
-    isComplete = ()=>{
-        if (!Autopilot.isMoving()) {
-            Logger.info("Animation interrupted by user interaction.");
-            return true;
-        }
-
-        const res = Autopilot.vectorsCloseEnough(Graph.zoom, this.targetZoom)
-                 && Autopilot.vectorsCloseEnough(Graph.pan, this.targetPan);
-        if (res) { // If close-enough, equate them
-            Graph.pan_set(this.targetPan).zoom_set(this.targetZoom)
-        }
-        return res;
-    }
+    const fly = ()=>DeepNav.flyTo(target, zs, { speed: (speed === true ? 1 : speed) })
+        .then( (arrived)=>{
+            if (!arrived) Logger.info("Animation interrupted by user interaction.");
+        });
+    return Promise.forAnimation("Set Coords", 0, fly);
 }
 
 Animation.zoomToNodeTitle = function(nodeOrTitle, zoomLevel = 1.0, delay){
@@ -356,6 +325,14 @@ Animation.resetView = function(animate = true, duration = 2000){
     const defaultPanImaginary = 0;
     const defaultPan = new vec2(defaultPanReal, defaultPanImaginary);
 
+    if (!DeepFrame.isIdentity) {
+        // The defaults above are absolute; from a deep frame, fly back to them.
+        const target = DeepFrame.parsePoint(String(defaultPanReal), String(defaultPanImaginary));
+        const zs = DeepNum.sx(defaultZoomMagnitude);
+        const fly = ()=>DeepNav.flyTo(target, zs, { instant: !animate, speed: 0.15 });
+        return Promise.forAnimation("Reset View", 0, fly);
+    }
+
     if (!animate) { // Resolve immediately
         Graph.zoom_set(defaultZoom).pan_set(defaultPan);
         return Promise.resolve();
@@ -368,8 +345,17 @@ Animation.resetView = function(animate = true, duration = 2000){
 }
 
 Graph.prototype.getCoords = function(forFunctionCall = false){
+    if (!DeepFrame.isIdentity) {
+        // Beyond float range: exact decimal strings, quoted in the call form.
+        const view = DeepFrame.viewStrings();
+        if (forFunctionCall) {
+            return `setMandelbrotCoords("${view.zoom}", "${view.re}", "${view.im}", 0.1);`;
+        }
+        return { zoom: view.zoom, pan: view.re + "+i" + view.im };
+    }
+
     // Extract and format zoom and pan values
-    const zoomValue = this.zoom.x.toExponential();
+    const zoomValue = this.zoom.mag().toExponential();
     const panReal = this.pan.x.toExponential();
     const panImaginary = this.pan.y.toExponential();
 

@@ -225,9 +225,10 @@ Svg.recalc = function() {
     const oldZoom = this.oldZoom;
     const pan = this.pan;
     const zoom = this.zoom;
-    for (const child of svg_bg.children) {
+    for (const child of Array.from(svg_bg.children)) {
         const recalculated = [];
         let coord = 0;
+        let usable = true;
         const parts = child.getAttribute('d').split(/[, ]+/g);
         for (let p of parts) {
             if (p.length && !isNaN(Number(p))) {
@@ -235,8 +236,15 @@ Svg.recalc = function() {
                 p = Number(p) / oldZoom + oldPan[c];
                 p = (p - pan[c]) * zoom;
                 coord = 1 - coord;
+                // A path left far behind by a long zoom no longer fits the
+                // canvas's number range (and is nowhere near the screen).
+                if (!(Math.abs(p) < 1e30)) usable = false;
             }
             recalculated.push(p);
+        }
+        if (!usable) {
+            child.remove();
+            continue;
         }
         child.setAttribute('d', recalculated.join(' '));
         const strokeWidth = child.getAttribute('stroke-width');
@@ -304,7 +312,27 @@ function mand_step(z, c, iteration) {
 
 Fractal.unstep = function(z, c){ return z.csub(c).sqrt() }
 
+// Local (frame-relative) point -> absolute float coordinates. Only meaningful
+// while the view is shallow enough for doubles; used by fractal types that
+// have no deep-zoom evaluation.
+Fractal.toAbsFloat = function(c){
+    if (DeepFrame.isIdentity) return c;
+    const o = DeepFrame.originFloat();
+    const ldexp = DeepNum.ldexp;
+    return new vec2(o.x + ldexp(c.x, -DeepFrame.k), o.y + ldexp(c.y, -DeepFrame.k));
+}
+
+// Iteration budget for the current view. Deep zoom needs far more than the
+// slider value, so there it is chosen automatically.
+Fractal.maxIter = function(){
+    return (DeepFractal.active && DeepFractal.ready) ? DeepFractal.limit() : settings.iterations;
+}
+
 Fractal.mand_i = function(z, iters = 16){
+    if (!DeepFrame.isIdentity) {
+        if (DeepFractal.active) return DeepFractal.isInside(z) ? iters + 1 : 0;
+        z = Fractal.toAbsFloat(z);
+    }
     const step = Fractal.step;
     const c = z;
     for (let i = 0; i < iters; i++) {
@@ -316,6 +344,10 @@ Fractal.mand_i = function(z, iters = 16){
 }
 
 Fractal.dist = function(iters, c, z = new vec2(0, 0)){
+    if (!DeepFrame.isIdentity) {
+        if (DeepFractal.active) return DeepFractal.dist(c);
+        c = Fractal.toAbsFloat(c);
+    }
     const bailout = 1e8; //large so z^2+c -> z^2
     const step = Fractal.step;
 
@@ -359,7 +391,11 @@ function mandelbrott_grad(iters, c, z = new vec2(0, 0)) {
 
 Fractal.grad = function(maxIters, c, z){
     //return mandelbrott_grad(maxIters,c,z);
-    const e = 1e-10;
+    if (DeepFractal.active) return DeepFractal.gradAt(c); // analytic, in local units
+
+    // The probe offset must stay proportionate to the view once coordinates
+    // are frame-relative; in the identity frame it is the original 1e-10.
+    const e = (DeepFrame.isIdentity ? 1e-10 : Graph.zoom.mag() * 1e-6);
     const getDist = Fractal.dist;
     const d = getDist(maxIters, c, z);
     return new vec2(
@@ -436,7 +472,7 @@ Fractal.color = function(iters, z){
     let i = Fractal.dist(iters, z);
     if (i < iters) return Color.strRgb(i);//outside set
     //inside set
-    i = findInfimum(iters, z);
+    i = findInfimum(iters, Fractal.toAbsFloat(z));
     //i = findPeriod(z);
     return Color.strRgb(i.i * 123 + 2, (1 - nodeMode_v), 128, 32 + (1 - nodeMode_v) * 48);
 }
@@ -575,14 +611,17 @@ Fractal.sample_random_point = function(){
 
     const getGrad = Fractal.grad;
     const mand_i = Fractal.mand_i;
-    const iters = settings.iterations;
+    const iters = Fractal.maxIter();
+    // The "+ 1" damps steps where the field is flat; it is in absolute units,
+    // so it only makes sense while coordinates are absolute.
+    const damping = (DeepFrame.isIdentity ? 1 : 1e-300);
     let tries = 1;
     let pt;
     do {
         pt = random_screen_pt_z();
         for (let i = (1 - Math.random() ** 2) * (tries * 4); i > 1; i--) {
             const gz = getGrad(iters, pt);
-            pt = pt.plus(gz.unscale(gz.mag2() * 10 + 1));
+            pt = pt.plus(gz.unscale(gz.mag2() * 10 + damping));
             //if (mand_i(pt,iters) > iters){
             //    pt = (new vec2(Math.random()*2-1,Math.random()*2-1)).cmult(Graph.zoom).cadd(Graph.pan);
             //}
@@ -595,16 +634,20 @@ Fractal.sample_random_point = function(){
 Fractal.path_to_basin = function* (pt) {
     const iter_n = Fractal.iter_n;
     const gradzr = Fractal.gradzr; //gradzr(f,z,epsilon) = ∂|f(z)|/∂z
-    const p = findInfimum(settings.iterations, pt);
-    const func = (z)=>iter_n(p.i, z, z).mag2() ;
+    const toAbs = Fractal.toAbsFloat;
+    const p = findInfimum(settings.iterations, toAbs(pt));
+    const func = (z)=>{ const a = toAbs(z); return iter_n(p.i, a, a).mag2() };
+    const epsilon = (DeepFrame.isIdentity ? 1e-5 : Graph.zoom.mag() * 1e-5);
     while (true) {
-        let delta = gradzr(func, pt, 1e-5);
+        let delta = gradzr(func, pt, epsilon);
         delta = delta.unscale(delta.mag() + 1e-300).scale(Graph.zoom.mag() * .1); //normalize and scale delta
         pt = pt.plus(delta.scale(-settings.renderStepSize));
         yield pt;
     }
 }
 Fractal.generate_path_data = function(pt, num_pts_max) {
+    if (DeepFractal.active) return DeepFractal.pathData(pt, num_pts_max);
+
     const originalPoints = [pt];
     let length = 0;
     let opt = pt;
@@ -680,6 +723,7 @@ Fractal.hair_svg_path = function(pt, num_pts_max) {
     path.setAttribute('stroke-width', String(pathData.width * Svg.zoom));
     path.setAttribute('stroke-opacity', String(pathData.opacity));
     path.setAttribute('data-original-points', JSON.stringify(pathData.originalPoints));
+    path.dataset.epoch = DeepFrame.epoch;
     path.setAttribute('d', Fractal.build_path_d(pathData.originalPoints));
     return path;
 }
@@ -693,6 +737,7 @@ Fractal.hair_svg_path_delayed = function(pt, num_pts_max) {
     path.setAttribute('stroke-width', String(pathData.width * Svg.zoom));
     path.setAttribute('stroke-opacity', pathData.opacity);
     path.setAttribute('data-original-points', JSON.stringify(pathData.originalPoints));
+    const epoch = path.dataset.epoch = DeepFrame.epoch;
 
     let currentPoints = [pathData.originalPoints[0]];
     path.setAttribute('d', Fractal.build_path_d(currentPoints));
@@ -701,6 +746,9 @@ Fractal.hair_svg_path_delayed = function(pt, num_pts_max) {
         const dynamicDelay = Math.max(10, settings.renderDelay / settings.regenDebtAdjustmentFactor);
         for (let i = 1; i < pathData.originalPoints.length; i++) {
             await Promise.delay(dynamicDelay);
+            // The stored points are frame-relative; after a rebase they no
+            // longer describe this path, so leave it as drawn.
+            if (epoch !== DeepFrame.epoch) break;
             currentPoints.push(pathData.originalPoints[i]);
             path.setAttribute('data-original-points', JSON.stringify(currentPoints));
             path.setAttribute('d', Fractal.build_path_d(currentPoints));
@@ -736,6 +784,7 @@ Fractal.animate_path_removal = async function(path) {
 
         while (originalPoints.length > 1) {
             await Promise.delay(dynamicDelay);
+            if (Number(path.dataset.epoch) !== DeepFrame.epoch) break; // frame moved on
             originalPoints.shift();
             path.setAttribute('data-original-points', JSON.stringify(originalPoints));
             path.setAttribute('d', Fractal.build_path_d(originalPoints));

@@ -311,13 +311,14 @@ function returnToSavedView(savedView, animate = true, speed = 0.0001) {
         return;
     }
 
-    // Extract real and imaginary parts from pan
+    // Extract real and imaginary parts from pan. They stay strings: a deep
+    // view has more digits than parseFloat can keep.
     const panParts = standardCoords.pan.split('+i');
-    const panReal = parseFloat(panParts[0]);
-    const panImaginary = panParts.length > 1 ? parseFloat(panParts[1]) : 0;
+    const panReal = panParts[0];
+    const panImaginary = panParts.length > 1 ? panParts[1] : '0';
 
     Animation.goToCoords(
-        parseFloat(standardCoords.zoom),
+        standardCoords.zoom,
         panReal,
         panImaginary,
         animate,

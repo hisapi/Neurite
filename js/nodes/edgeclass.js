@@ -29,7 +29,8 @@ class Edge {
     static dataForEdge(edge){ return edge.dataObj() }
     dataObj() {
         return {
-            l: this.length,
+            l: (this.parked ? DeepNum.sxToFloat(this.deepLength) : this.length),
+            k: (this.parked ? 0 : DeepFrame.k), // frame exponent the length is relative to
             s: this.strength,
             g: this.style,
             p: this.pts.map(String.uuidOf),
@@ -120,11 +121,27 @@ class Edge {
         this.length *= amount;
     }
     step(dt) {
+        // An edge is live only while at least one end is on screen and both
+        // ends have usable coordinates in the current frame.
+        const pts = this.pts;
+        let anyShown = false;
+        let anyParked = this.parked === true;
+        for (const n of pts) {
+            if (n.parked) anyParked = true;
+            else if (!n.culled) anyShown = true;
+        }
+        const hidden = anyParked || !anyShown;
+        if (hidden !== this.hidden) {
+            this.hidden = hidden;
+            this.view.setHidden(hidden);
+        }
+        if (hidden) return;
+
         dt = (isNaN(dt) ? 0 : Math.min(dt, 1));  // Clamp dt to a maximum of 1
 
         const avg = this.center();
         for (let n of this.pts) {
-            if (n.anchorForce !== 0) continue; // Only apply force if the anchor force is zero
+            if (n.anchorForce !== 0 || n.isAsleep) continue; // anchored or frozen ends take no force
 
             const d = n.pos.minus(avg);
             const dMag = d.mag();
@@ -207,6 +224,13 @@ class EdgeView {
         const borderPath = this.makeBorderPath(svgArrow);
         this.svgBorder.setAttribute('d', borderPath);
         this.svgBorder.style.display = '';
+    }
+    setHidden(hidden){
+        this.svgLink.style.display = (hidden ? 'none' : '');
+        if (hidden) {
+            this.svgArrow.style.display = 'none';
+            this.svgBorder.style.display = 'none';
+        }
     }
     toggleMouseOver(status){
         this.mouseIsOver = status;

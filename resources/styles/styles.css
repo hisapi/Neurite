@@ -1983,6 +1983,31 @@ td {
     left: 0;
 }
 
+/* Deep store: notes too small to draw as windows appear as dots. */
+#deep-dots {
+    width: 100%;
+    height: 100vh;
+    position: fixed;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+}
+
+.deep-note-text {
+    background-color: #222226;
+    color: #bbb;
+    border: none;
+    outline: none;
+    resize: both;
+    width: 259px;
+    min-height: 64px;
+    line-height: 1.4;
+    padding: 6px;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 14px;
+}
+
         .extract-textarea {
             background-color: #222226;
             width: 261px;
