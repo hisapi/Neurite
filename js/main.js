@@ -273,6 +273,7 @@ class PageLoad {
         'js/interface/neuralapi.js',
         'js/deep/deepstore.js',
         'js/deep/deepapi.js',
+        'js/deep/fractalcrawl.js',
         'js/interface/functioncall/functioncallingpanel.js',
         'js/interface/functioncall/neuraltelemetryprompt.js',
         'js/interface/functioncall/requestfunctioncall.js',

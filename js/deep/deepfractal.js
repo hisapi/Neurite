@@ -25,6 +25,7 @@ const DeepFractal = {
     ref: null,              // reference in use
     pending: null,          // replacement being computed
     maxIter: 0,
+    iterDepth: 0,           // depth (octaves) at which the budget last grew
     stats: { total: 0, inside: 0 },
     deadline: Infinity,     // hairs stop growing past this time (set per frame)
 
@@ -61,6 +62,11 @@ const DeepFractal = {
         const depth = -DeepFrame.zoomLog2();
         const floor = Math.max(settings.iterations, 96 + Math.round(10 * depth));
         if (this.maxIter < floor) this.maxIter = floor;
+        // A budget grown for a much deeper view is far too large up here.
+        if (depth < this.iterDepth - 20) {
+            this.maxIter = Math.min(this.maxIter, floor * 2);
+            this.iterDepth = depth;
+        }
 
         const degree = this.degree();
         if (this.pending && !this._fits(this.pending, degree)) {
@@ -226,6 +232,7 @@ const DeepFractal = {
 
         if (frac > 0.5) {
             this.maxIter = Math.min(this.iterCap, Math.ceil(this.maxIter * 1.3) + 32);
+            this.iterDepth = Math.max(this.iterDepth, -DeepFrame.zoomLog2());
         } else if (frac < 0.1 && this.maxIter > floor) {
             this.maxIter = Math.max(floor, Math.floor(this.maxIter * 0.97));
         }
