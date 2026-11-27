@@ -18,9 +18,12 @@ class Node {
             const nodeData = JSON.parse(dataset.node_json)
             const vecProps = ['anchor', 'mouseAnchor', 'vel', 'pos', 'force'];
             for (const k in nodeData) {
+                if (k === 'frame' || k === 'parkedAt') continue;
                 const val = nodeData[k];
                 this[k] = (vecProps.includes(k) ? new vec2(val) : val);
             }
+            // Saved coordinates are relative to the frame they were saved in.
+            DeepFrame.adoptNode(this, nodeData.frame, nodeData.parkedAt);
 
             if (dataset.node_extras) {
                 const extraData = JSON.parse(dataset.node_extras);
@@ -52,6 +55,7 @@ class Node {
         }
 
         this.addListeners();
+        DeepPerf.observe(this);
     }
     addListeners() {
         const div = this.content;
@@ -62,15 +66,24 @@ class Node {
         On.mouseup(document, this.onMouseUp);
         On.wheel(div, this.onWheel);
     }
+    static transientKeys = new Set([
+        "content", "edges", "save_extras", "viewer",
+        "aiResponseEditor", "aiNodeMessageLoop", "sensor", "responseHandler",
+        "view", "agent", "typeNode",
+        // per-session draw / deep-zoom state
+        "deep", "parked", "culled", "layoutW", "layoutH", "drawn",
+        "fractalGrad", "fractalGradEpoch", "deepRecord"
+    ]);
     toJSON() {
-        return JSON.stringify({...this}, (k, v) => {
-            if (k === "content" || k === "edges" || k === "save_extras" || k === "viewer" ||
-                k === "aiResponseEditor" || k === "aiNodeMessageLoop" || k === "sensor" || k === "responseHandler" ||
-                k === "view" || k === "agent" || k === "typeNode") {
-                return undefined;
-            }
-            return v;
-        });
+        const data = {...this};
+        // Positions are relative to the current deep frame; record which, so
+        // they can be placed correctly when loaded at another depth.
+        if (this.parked) {
+            data.parkedAt = DeepFrame.describeParked(this);
+        } else if (!DeepFrame.isIdentity) {
+            data.frame = DeepFrame.serialize();
+        }
+        return JSON.stringify(data, (k, v) => (Node.transientKeys.has(k) ? undefined : v));
     }
     updateNodeData() {
         const saveExtras = [];
@@ -104,24 +117,65 @@ class Node {
 
     draw() {
         const e = this.content;
-        const s = this.intrinsicScale * this.scale * (Graph.zoom.mag2() ** -settings.zoomContentExp);
+        const perf = DeepPerf;
+        if (perf.frame === 0) perf.beginFrame(); // drawn before the first frame
 
-        const svgbb = svg.getBoundingClientRect();
-        e.style.position = 'absolute';
-        e.style.transform = 'scale(' + s + ',' + s + ')';
-        let p = fromZtoUV(this.pos);
-        const cond = p.minus(new vec2(0.5, 0.5)).mag2() > 16;
-        e.style.display = (cond ? 'none' : 'initial');
+        if (this.parked) return this.setCulled(true);
 
-        const w = Math.min(svgbb.width, svgbb.height);
-        const off = svgbb.width < svgbb.height ? svgbb.right : svgbb.bottom;
-        p.x = w * p.x - (off - svgbb.right) / 2;
-        p.y = w * p.y - (off - svgbb.bottom) / 2;
+        const s = this.intrinsicScale * this.scale * perf.contentZoom;
 
-        const bb = e.getBoundingClientRect();
-        p = p.minus(new vec2(bb.width, bb.height).scale(0.5 / s));
-        e.style.left = p.x + 'px';
-        e.style.top = p.y + 'px';
+        // Centre of the node in pixels: ((pos - pan) / zoom) mapped to the view.
+        const dx = this.pos.x - perf.panX;
+        const dy = this.pos.y - perf.panY;
+        const cx = ((dx * perf.izx - dy * perf.izy) / 2 + .5) * perf.scale + perf.offX;
+        const cy = ((dy * perf.izx + dx * perf.izy) / 2 + .5) * perf.scale + perf.offY;
+
+        // Layout size is tracked by a ResizeObserver; measuring here would
+        // force a synchronous layout for every node on every frame.
+        let w = this.layoutW;
+        let h = this.layoutH;
+        if (w === undefined && !this.culled) {
+            w = e.offsetWidth;
+            h = e.offsetHeight;
+            if (w > 0 && h > 0) {
+                this.layoutW = w;
+                this.layoutH = h;
+            }
+        }
+        w ||= 0;
+        h ||= 0;
+
+        // Worth drawing only if it overlaps the (padded) viewport at a size
+        // between a few pixels and a few screens.
+        const mx = perf.width * perf.margin;
+        const my = perf.height * perf.margin;
+        const hw = (w || 300) * s / 2;
+        const hh = (h || 200) * s / 2;
+        const visible = s >= perf.minScale && s <= perf.maxScale
+            && cx + hw > -mx && cx - hw < perf.width + mx
+            && cy + hh > -my && cy - hh < perf.height + my
+            && Number.isFinite(cx) && Number.isFinite(cy);
+        if (!visible && !(this.culled === false && perf.isHeld(this) && Number.isFinite(s))) {
+            return this.setCulled(true);
+        }
+        this.setCulled(false);
+        perf.shownNow += 1;
+
+        const left = cx - w / 2;
+        const top = cy - h / 2;
+        const drawn = this.drawn ||= { s: NaN, left: NaN, top: NaN };
+        if (drawn.s !== s) {
+            drawn.s = s;
+            e.style.transform = 'scale(' + s + ',' + s + ')';
+        }
+        if (drawn.left !== left) {
+            drawn.left = left;
+            e.style.left = left + 'px';
+        }
+        if (drawn.top !== top) {
+            drawn.top = top;
+            e.style.top = top + 'px';
+        }
 
         //e.style['margin-top'] = "-"+(e.offsetHeight/2)+'px';//"-50%";
         //e.style['margin-left'] = "-"+(e.offsetWidth/2)+'px';//"-50%";
@@ -129,7 +183,31 @@ class Node {
         //e.style['text-align']= 'center';
     }
 
+    setCulled(culled) {
+        if (this.culled === culled) return;
+
+        const style = this.content.style;
+        if (culled) {
+            style.display = 'none';
+        } else {
+            style.position = 'absolute';
+            style.display = 'initial';
+            // Edge forces were not consumed while hidden; do not release them at once.
+            if (this.culled !== undefined && DeepPerf.freezeHidden) {
+                this.vel = new vec2(0, 0);
+                this.force = new vec2(0, 0);
+            }
+        }
+        this.culled = culled;
+    }
+    get isAsleep() {
+        return this.parked || (this.culled === true && DeepPerf.freezeHidden && !this.followingMouse);
+    }
+
     step(dt) {
+        // Hidden nodes only re-test their visibility.
+        if (this.isAsleep) return this.draw();
+
         dt = this.clampDt(dt);
         this.updatePosition(dt);
         this.applyMandelbrotForce();
@@ -157,7 +235,7 @@ class Node {
     applyMandelbrotForce() {
         if (this.anchorForce !== 0) return;
 
-        const g = Fractal.grad(settings.iterations, this.pos);
+        const g = DeepPerf.gradFor(this);
 
         if (settings.useFlowDirection && g.mag2() > 0) {
             const randomRotation = this.randomNodeFlowRange;

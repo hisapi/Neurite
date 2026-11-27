@@ -79,6 +79,7 @@ class Graph {
         delete this.nodes[uuid];
 
         target.removed = true;
+        DeepPerf.unobserve(target);
         target.content.remove();
     }
 
@@ -295,7 +296,13 @@ function edgeFromJSON(edgeData) {
     const edgeKey = edgeData.edgeKey;
     if (Graph.findEdge( (edge)=>(edge.edgeKey === edgeKey) )) return;
 
-    const edge = new Edge(pts, edgeData.l, edgeData.s, edgeData.g);
+    // The saved length is relative to the frame it was saved in.
+    const length = DeepNum.ldexp(edgeData.l, DeepFrame.k - (edgeData.k || 0));
+    const edge = new Edge(pts, length, edgeData.s, edgeData.g);
+    if (!(length > 0) || !Number.isFinite(length)) {
+        edge.deepLength = DeepNum.sx(edgeData.l, -(edgeData.k || 0));
+        edge.parked = true;
+    }
     pts.forEach(Node.addEdgeThis, edge);
     Graph.addEdge(edge);
     return edge;

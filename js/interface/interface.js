@@ -3,13 +3,22 @@ const Autopilot = {
     panToI_prev: null,
     referenceFrame: null,
     referenceScalePrev: 1,
+    deepFlight: null, // a DeepNav.Flight in progress, if any
     speed: 0,
     targetPan: new vec2(0, 0),
     targetZoom: new vec2(4, 0),
     threshold: 0.000001,
 
     isMoving(){ return this.speed !== 0 },
+    cancelFlight(){
+        const flight = this.deepFlight;
+        if (!flight) return;
+
+        this.deepFlight = null;
+        flight.finish(false);
+    },
     reset(){
+        Autopilot.cancelFlight();
         Autopilot.speed = 0;
         return Autopilot.setNode();
     },
@@ -24,10 +33,12 @@ const Autopilot = {
         return this;
     },
     start(speed = settings.autopilotSpeed){
+        this.cancelFlight();
         this.speed = speed;
         return this;
     },
     stop(){
+        this.cancelFlight();
         this.speed = 0;
         return this;
     },
@@ -77,7 +88,9 @@ On.input(panInput, (e)=>{
     const m = panInput.value.match(r);
     if (m === null) return;
 
-    Graph.pan_set(new vec2(parseFloat(m[0]), parseFloat(m[6].replace(/[iI]/, ''))));
+    // Parsed as exact decimals: at depth these have far more digits than a double.
+    const pt = DeepFrame.parsePoint(m[1], m[6].replace(/[iI]/, ''), DeepFrame.zoomSx());
+    if (pt) DeepFrame.setView(pt);
 });
 On.input(zoomInput, (e)=>{
     App.interface.coordsLive = false;
@@ -85,8 +98,8 @@ On.input(zoomInput, (e)=>{
     const m = zoomInput.value.match(r);
     if (m === null) return;
 
-    const z = parseFloat(m);
-    if (z !== 0) Graph.zoom_scaleBy(z / Graph.zoom.mag());
+    const zs = DeepNum.sxParse(m[0]); // may be far below the smallest double
+    if (zs) DeepFrame.setView(DeepFrame.view(), zs);
 });
 ['paste', 'mousemove', 'mousedown', 'dblclick', 'click'].forEach( (eName)=>{
     On[eName](panInput, Event.stopPropagation);

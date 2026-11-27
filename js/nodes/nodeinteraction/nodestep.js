@@ -8,6 +8,12 @@ let avgfps = 0;
 //let manualConnectionOverride = false;
 
 Autopilot.update = function(time){
+    if (this.deepFlight) {
+        this.deepFlight.step(time);
+        return Autopilot.showCoords();
+    }
+    if (this.speed === 0) return Autopilot.showCoords(); // idle: nothing to interpolate
+
     const oldPan = Graph.pan;
     let newPan;
     if (this.referenceFrame && this.speed !== 0) {
@@ -39,14 +45,29 @@ Autopilot.update = function(time){
         const speedCoeff = Math.tanh(Math.log(settings.autopilotMaxSpeed / autopilot_travelDist + 1e-300) / 10) * 2;
         Graph.zoom_scaleBy(1 - speedCoeff * this.speed);
     } else {
-        Graph.zoom_set(Graph.zoom.scale(1 - this.speed)
-                        .plus(this.targetZoom.scale(this.speed)));
+        let zoom = Graph.zoom.scale(1 - this.speed)
+                    .plus(this.targetZoom.scale(this.speed));
+        // A target many octaves away would otherwise be reached in one
+        // frame; cap the change so the motion stays continuous.
+        const ratio = zoom.mag() / Graph.zoom.mag();
+        if (ratio > 4) zoom = zoom.scale(4 / ratio);
+        Graph.zoom_set(zoom);
     }
     Graph.pan_set(newPan);
-    if (App.interface.coordsLive) {
+    Autopilot.showCoords();
+}
+Autopilot.showCoords = function(){
+    if (!App.interface.coordsLive) return;
+
+    if (DeepFrame.isIdentity) {
         panInput.value = Graph.pan.ctostring();
         zoomInput.value = String(Graph.zoom.mag());
+        return;
     }
+    // Beyond float range the coordinates are shown as exact decimals.
+    const view = DeepFrame.viewStrings();
+    panInput.value = view.re + (view.im[0] === '-' ? '-i' + view.im.slice(1) : '+i' + view.im);
+    zoomInput.value = view.zoom;
 }
 
 class NodeSimulation {
@@ -66,6 +87,13 @@ class NodeSimulation {
     }
 
     updateMousePath() {
+        // The orbit of c lives at unit scale. In a deep frame it is off any
+        // conceivable screen, and local coordinates are not absolute anyway.
+        if (!DeepFrame.isIdentity) {
+            if (this.mousePath.length > 0) this.mousePath = [];
+            return;
+        }
+
         if (this.mousePath.length < 1) {
             this.mousePathPos = Graph.vecToZ();
             this.mousePath = ["M ", this.mousePathPos.toSvg(), " L "];
@@ -138,8 +166,13 @@ class NodeSimulation {
         const lerp = Math.lerp;
         const random = Math.random;
         regenDebt = Math.min(16, regenDebt + lerp(settings.regenDebtAdjustmentFactor, regenAmount, Math.min(1, (nodeMode_v ** 5) * 1.01)));
+        // Deep hairs can each cost thousands of iterations per point. Draw as
+        // many as fit the frame budget and carry the rest over, so depth
+        // slows the background's refresh instead of the frame rate.
+        const deadline = (DeepFractal.active ? performance.now() + DeepPerf.hairBudgetMs : Infinity);
         for (; regenDebt > 0; regenDebt--) {
             Fractal.render_hair(random() * settings.renderSteps);
+            if (performance.now() > deadline) break;
         }
         regenAmount = 0;
         nodeMode_v = lerp(nodeMode_v, App.nodeMode, 0.125);
@@ -156,12 +189,17 @@ class NodeSimulation {
 
         if (App.selectedNodes.uuids.size > 0) this.processSelectedNodes();
 
+        DeepFrame.maintain();
         Autopilot.update(time);
+        DeepFrame.maintain();   // the autopilot may have moved the view a long way
+        DeepFractal.update();
+        DeepPerf.beginFrame();
         Svg.updateViewbox();
         this.updateMousePath();
         this.updateMousePathWidth();
         const dt = this.updateFPS(time);
         this.updateNodes(dt).updateEdges(dt).updateRegen();
+        DeepPerf.endFrame();
 
         window.requestAnimationFrame(this.nodeStep);
     }
